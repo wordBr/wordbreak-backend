@@ -1,0 +1,13 @@
+# Build output
+/bin/
+/wordbreak-server
+*.exe
+
+# Secrets — this project passes keys via env vars, but guard against a stray local file.
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+*.log
