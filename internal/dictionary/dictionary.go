@@ -56,6 +56,16 @@ func NewFromWords(words []string) *Dictionary {
 // Size reports how many words are loaded.
 func (d *Dictionary) Size() int { return len(d.words) }
 
+// AllWords returns every loaded word, uppercase. Used to build the grid solver's trie once
+// at startup — not for hot-path lookups.
+func (d *Dictionary) AllWords() []string {
+	out := make([]string, 0, len(d.words))
+	for w := range d.words {
+		out = append(out, w)
+	}
+	return out
+}
+
 // Contains reports whether word (case-insensitive) is in the dictionary.
 func (d *Dictionary) Contains(word string) bool {
 	_, ok := d.words[strings.ToUpper(word)]

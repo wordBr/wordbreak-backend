@@ -5,6 +5,7 @@
 //	GET  /health
 //	GET  /api/referee                      -> referee address (to configure the contract)
 //	GET  /api/solo/rack?size=6             -> a fresh solo rack (answers withheld)
+//	GET  /api/solo/grid?size=4             -> a fresh solo grid board (Boggle-style, answers included)
 //	POST /api/solo/score                   -> score {letters, words[]}
 //	GET  /api/daily                        -> today's shared rack
 //	POST /api/daily/submit                 -> submit {address, words[]} for today
@@ -20,10 +21,13 @@ import (
 	"net/http"
 	"time"
 
+	"math/rand"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/wordbreak/backend/internal/chain"
 	"github.com/wordbreak/backend/internal/dictionary"
 	"github.com/wordbreak/backend/internal/game"
+	"github.com/wordbreak/backend/internal/grid"
 	"github.com/wordbreak/backend/internal/rack"
 	"github.com/wordbreak/backend/internal/room"
 	"github.com/wordbreak/backend/internal/signer"
@@ -33,29 +37,34 @@ import (
 // Config holds runtime knobs.
 type Config struct {
 	SoloRackSize  int
+	SoloGridSize  int
 	DailyRackSize int
 	AdminToken    string // if empty, admin routes are disabled
 }
 
 // Server is the API dependencies.
 type Server struct {
-	dict   *dictionary.Dictionary
-	store  *store.Store
-	signer *signer.Signer // may be nil if no referee key configured
-	chain  *chain.Client  // may be nil if no RPC configured
-	rooms  *room.Manager
-	cfg    Config
+	dict     *dictionary.Dictionary
+	gridTrie *grid.Trie
+	store    *store.Store
+	signer   *signer.Signer // may be nil if no referee key configured
+	chain    *chain.Client  // may be nil if no RPC configured
+	rooms    *room.Manager
+	cfg      Config
 }
 
 // New builds a Server. signer and chainCli may be nil (game works; signing/paid daily 503).
-func New(d *dictionary.Dictionary, st *store.Store, sg *signer.Signer, chainCli *chain.Client, cfg Config) *Server {
+func New(d *dictionary.Dictionary, gt *grid.Trie, st *store.Store, sg *signer.Signer, chainCli *chain.Client, cfg Config) *Server {
 	if cfg.SoloRackSize == 0 {
 		cfg.SoloRackSize = 6
+	}
+	if cfg.SoloGridSize == 0 {
+		cfg.SoloGridSize = 4
 	}
 	if cfg.DailyRackSize == 0 {
 		cfg.DailyRackSize = 6
 	}
-	return &Server{dict: d, store: st, signer: sg, chain: chainCli, rooms: room.NewManager(d), cfg: cfg}
+	return &Server{dict: d, gridTrie: gt, store: st, signer: sg, chain: chainCli, rooms: room.NewManager(d), cfg: cfg}
 }
 
 // EnableRoomStaking wires the on-chain writer into the multiplayer room manager, turning on
@@ -70,6 +79,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/referee", s.handleReferee)
 	mux.HandleFunc("GET /api/solo/rack", s.handleSoloRack)
+	mux.HandleFunc("GET /api/solo/grid", s.handleSoloGrid)
 	mux.HandleFunc("POST /api/solo/score", s.handleSoloScore)
 	mux.HandleFunc("GET /api/daily", s.handleDaily)
 	mux.HandleFunc("POST /api/daily/submit", s.handleDailySubmit)
@@ -107,6 +117,20 @@ func (s *Server) handleSoloRack(w http.ResponseWriter, r *http.Request) {
 	// validation. The PAID daily deliberately never does this (see handleDaily).
 	writeJSON(w, http.StatusOK, map[string]any{
 		"letters":   res.Letters,
+		"wordCount": len(res.Words),
+		"words":     res.Words,
+	})
+}
+
+func (s *Server) handleSoloGrid(w http.ResponseWriter, r *http.Request) {
+	size := clampGridSize(intQuery(r, "size", s.cfg.SoloGridSize))
+	res := grid.GenerateSolo(s.gridTrie, size, size, rand.New(rand.NewSource(rand.Int63())))
+	// Same policy as handleSoloRack: solo is free practice, so the answer set ships with
+	// the board for instant, offline-friendly validation.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"letters":   res.Letters,
+		"width":     res.Width,
+		"height":    res.Height,
 		"wordCount": len(res.Words),
 		"words":     res.Words,
 	})
@@ -455,6 +479,16 @@ func clampSize(n int) int {
 	}
 	if n > 8 {
 		return 8
+	}
+	return n
+}
+
+func clampGridSize(n int) int {
+	if n < 4 {
+		return 4
+	}
+	if n > 6 {
+		return 6
 	}
 	return n
 }

@@ -14,7 +14,9 @@ import (
 
 	"github.com/wordbreak/backend/internal/api"
 	"github.com/wordbreak/backend/internal/chain"
+	"github.com/wordbreak/backend/internal/db"
 	"github.com/wordbreak/backend/internal/dictionary"
+	"github.com/wordbreak/backend/internal/grid"
 	"github.com/wordbreak/backend/internal/signer"
 	"github.com/wordbreak/backend/internal/store"
 )
@@ -28,6 +30,10 @@ func main() {
 	log.Println("loading dictionary...")
 	dict := dictionary.New()
 	log.Printf("dictionary loaded: %d words", dict.Size())
+
+	log.Println("building grid solver trie...")
+	gridTrie := grid.NewTrie(dict.AllWords())
+	log.Println("grid trie built")
 
 	// The referee signer is optional: without a key the game still runs, but settlement
 	// signing is disabled. This lets you develop the game loop before wiring up money.
@@ -67,8 +73,27 @@ func main() {
 		log.Println("no CHAIN_RPC_URL — paid dailies disabled (solo + unpaid daily only)")
 	}
 
-	srv := api.New(dict, store.New(), sg, chainCli, api.Config{
+	// Postgres persistence: without it the daily leaderboard and paid-round registration are
+	// pure in-memory and reset on every restart/redeploy. Optional — the game runs fine
+	// without a database, same graceful-degradation pattern as everything else here.
+	gameStore := store.New()
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		conn, err := db.New(ctx, dsn)
+		cancel()
+		if err != nil {
+			log.Fatalf("database: %v", err)
+		}
+		defer conn.Close()
+		gameStore = store.NewWithPersistence(conn)
+		log.Println("database connected — daily rounds/leaderboard now persist across restarts")
+	} else {
+		log.Println("no DATABASE_URL — daily rounds/leaderboard are in-memory only (reset on restart)")
+	}
+
+	srv := api.New(dict, gridTrie, gameStore, sg, chainCli, api.Config{
 		SoloRackSize:  envInt("SOLO_RACK_SIZE", 6),
+		SoloGridSize:  envInt("SOLO_GRID_SIZE", 4),
 		DailyRackSize: envInt("DAILY_RACK_SIZE", 6),
 		AdminToken:    os.Getenv("ADMIN_TOKEN"),
 	})

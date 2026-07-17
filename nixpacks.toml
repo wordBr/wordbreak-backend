@@ -1,0 +1,8 @@
+# Tells Railway's Nixpacks builder how to build this Go service — the entrypoint is
+# ./cmd/server, not a root-level main.go, which Nixpacks' Go auto-detection assumes by default.
+
+[phases.build]
+cmds = ["go build -o bin/server ./cmd/server"]
+
+[start]
+cmd = "./bin/server"
