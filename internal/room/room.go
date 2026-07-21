@@ -202,7 +202,16 @@ func (m *Manager) Create(playerID, name string, opts CreateOpts) (*RoomView, err
 		r.mu.Unlock()
 	}
 
-	r.addPlayer(playerID, name)
+	// Free rooms: the host can play immediately, no verification needed. Staked rooms: the
+	// host is NOT added here -- same as every other player, they only get added once they've
+	// actually staked on-chain, via the Join() call the frontend makes right after
+	// stakeOnChain() succeeds (Join already checks HasEntered for everyone else; the host was
+	// previously exempted from that, which both orphaned the room if the host's own stake
+	// transaction failed, and let the host be counted in settlement's payout math without
+	// ever having paid in).
+	if !staked {
+		r.addPlayer(playerID, name)
+	}
 	return r.snapshot(playerID), nil
 }
 
