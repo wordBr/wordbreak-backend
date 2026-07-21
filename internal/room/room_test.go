@@ -179,3 +179,29 @@ func TestStaking_RejectsNonWalletID(t *testing.T) {
 		t.Fatal("staked room was created for a non-wallet player id")
 	}
 }
+
+// The bug this guards against: settleRoom used to pay out the full pot with no rake deducted,
+// which the contract always rejects with PayoutExceedsPot (it only ever allows pot-minus-rake
+// to go to winners). payoutAfterRake must match WordBreakPools.settle()'s math exactly.
+func TestPayoutAfterRake(t *testing.T) {
+	cases := []struct {
+		name    string
+		pot     *big.Int
+		rakeBps uint16
+		want    *big.Int
+	}{
+		// The live mainnet daily round at the time this was written: 0.01 cUSD pot, 500 bps (5%).
+		{"live mainnet round (500 bps)", big.NewInt(10_000_000_000_000_000), 500, big.NewInt(9_500_000_000_000_000)},
+		{"zero rake", big.NewInt(1000), 0, big.NewInt(1000)},
+		{"100% rake", big.NewInt(1000), 10000, big.NewInt(0)},
+		{"odd pot rounds down like Solidity integer division", big.NewInt(999), 500, big.NewInt(950)}, // rake = floor(999*500/10000) = 49, payout = 999-49 = 950
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := payoutAfterRake(c.pot, c.rakeBps)
+			if got.Cmp(c.want) != 0 {
+				t.Fatalf("payoutAfterRake(%s, %d) = %s, want %s", c.pot, c.rakeBps, got, c.want)
+			}
+		})
+	}
+}

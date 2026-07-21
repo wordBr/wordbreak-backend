@@ -419,7 +419,6 @@ func (m *Manager) settleRoom(r *Room) {
 	}
 	r.settleStatus = "pending"
 	winnerID := r.leaderLocked()
-	pot := new(big.Int).Mul(r.stake, big.NewInt(int64(len(r.players))))
 	roundID := r.roundID
 	r.mu.Unlock()
 
@@ -431,8 +430,24 @@ func (m *Manager) settleRoom(r *Room) {
 		return
 	}
 
+	// The contract only ever allows paying out pot-minus-rake to winners (see
+	// WordBreakPools.settle) -- read its actual pot and rake rather than recomputing
+	// stake*len(players) locally, which can never account for the rake and, if a player were
+	// ever counted before actually staking, could overstate what's really escrowed.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	round, err := m.reader.GetRound(ctx, roundID)
+	cancel()
+	if err != nil {
+		r.mu.Lock()
+		r.settleStatus = "failed"
+		r.settleErr = "could not read round state: " + err.Error()
+		r.mu.Unlock()
+		return
+	}
+	payout := payoutAfterRake(round.Pot, round.RakeBps)
+
 	winners := []common.Address{common.HexToAddress(winnerID)}
-	amounts := []*big.Int{pot}
+	amounts := []*big.Int{payout}
 
 	sig, err := m.signer.SignSettlement(roundID, winners, amounts)
 	if err == nil {
@@ -452,6 +467,17 @@ func (m *Manager) settleRoom(r *Room) {
 }
 
 // --- internals ---
+
+// bpsDenominator matches WordBreakPools' BPS_DENOMINATOR (contracts/src/WordBreakPools.sol) --
+// rakeBps is out of 10000, not 100.
+const bpsDenominator = 10000
+
+// payoutAfterRake mirrors the contract's own settle() math exactly: the contract only ever
+// allows paying out pot-minus-rake to winners, reverting with PayoutExceedsPot otherwise.
+func payoutAfterRake(pot *big.Int, rakeBps uint16) *big.Int {
+	rake := new(big.Int).Div(new(big.Int).Mul(pot, big.NewInt(int64(rakeBps))), big.NewInt(bpsDenominator))
+	return new(big.Int).Sub(pot, rake)
+}
 
 func (r *Room) addPlayer(id, name string) {
 	if name == "" {
